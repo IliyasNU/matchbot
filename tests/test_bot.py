@@ -207,11 +207,17 @@ def test_end_to_end_registration_matching_restart_edit_delete(db):
                 await choose(uid, "male")
                 await choose(uid, "any")
                 await dispatch(uid, text="Almaty")
+                await choose(uid, "friendship")
+                await choose(uid, "interest_nature")
+                await choose(uid, "interest_travel")
+                await choose(uid, "done")
                 await dispatch(uid, text="I enjoy hiking.")
                 await dispatch(uid, photo=True)
                 assert db.session(uid)[0] == "preview"
                 await choose(uid, "publish")
                 assert db.user(uid)["active"]
+                assert set(db.user(uid)["interests"]) == {"nature", "travel"}
+                assert db.user(uid)["purpose"] == "friendship"
                 assert db.session(uid) is None
             await dispatch(1, text="/browse")
             token = db.conn.execute("SELECT token FROM views WHERE actor=1").fetchone()[0]

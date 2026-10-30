@@ -2,11 +2,11 @@
 
 TEXT = {
     "welcome": (
-        "Meet someone new. Create your profile, browse, and like people. When you both like each other, you both get a contact link.",
-        "Знакомься с новыми людьми. Создай анкету, листай и ставь лайки. При взаимной симпатии вы оба получите ссылку для общения.",
+        "Meet someone new. Add your interests and what you're looking for to help us suggest people for you. When you both like each other, you both get a contact link.",
+        "Знакомься с новыми людьми. Укажи интересы и цель знакомства, чтобы мы могли предложить подходящих людей. При взаимной симпатии вы оба получите ссылку для общения.",
     ),
     "menu": ("What would you like to do?", "Что хочешь сделать?"),
-    "browse": ("🔎 Discover", "🔎 Смотреть анкеты"),
+    "browse": ("🔎 People for you", "🔎 Подбор анкет"),
     "likes": ("💌 Who likes me", "💌 Меня лайкнули"),
     "matches": ("💕 My matches", "💕 Взаимные симпатии"),
     "profile": ("👤 My profile", "👤 Моя анкета"),
@@ -19,8 +19,8 @@ TEXT = {
     "home": ("🏠 Menu", "🏠 Меню"),
     "create": ("Create profile", "Создать анкету"),
     "consent": (
-        "This bot is for adults aged 18+. By continuing, you confirm that you are 18 or older and agree to your name, age, city, bio and photo being shown to other members. Your Telegram contact is shared after a mutual like. Use /privacy for data details and /cancel to leave.",
-        "Бот только для людей от 18 лет. Продолжая, ты подтверждаешь, что тебе есть 18, и соглашаешься на показ имени, возраста, города, описания и фото другим участникам. Контакт Telegram открывается при взаимной симпатии. Подробнее: /privacy. Отмена: /cancel.",
+        "This bot is for adults aged 18+. By continuing, you confirm that you are 18 or older and agree to your name, age, city, interests, dating purpose, bio and photo being shown to other members. Your Telegram contact is shared after a mutual like. Use /privacy for data details and /cancel to leave.",
+        "Бот только для людей от 18 лет. Продолжая, ты подтверждаешь, что тебе есть 18, и соглашаешься на показ имени, возраста, города, интересов, цели знакомства, описания и фото другим участникам. Контакт Telegram открывается при взаимной симпатии. Подробнее: /privacy. Отмена: /cancel.",
     ),
     "agree": ("I am 18+ and agree", "Мне есть 18, я согласен(-на)"),
     "name": ("What name should your profile show? (1–40 characters)", "Как тебя называть в анкете? (1–40 символов)"),
@@ -35,6 +35,39 @@ TEXT = {
         "Your city? (2–60 characters; use the same spelling as people nearby)",
         "Из какого ты города? (2–60 символов; используй общепринятое название)",
     ),
+    "purpose": (
+        "What are you looking for? Your goal helps us suggest people who want something similar.",
+        "Какая у тебя цель знакомства? Это поможет предлагать людей с похожими ожиданиями.",
+    ),
+    "purpose_label": ("Looking for", "Цель знакомства"),
+    "purpose_relationship": ("A relationship", "Отношения"),
+    "purpose_friendship": ("Friendship", "Дружба"),
+    "purpose_chat": ("Conversation", "Общение"),
+    "purpose_any": ("Open to anything", "Любая"),
+    "interests": (
+        "Choose up to 5 interests. Tap again to remove a choice, then tap Done. Shared interests help us suggest people for you.",
+        "Выбери до 5 интересов. Повторное нажатие снимает выбор, затем нажми «Готово». Общие интересы помогут подобрать людей для тебя.",
+    ),
+    "interests_label": ("Interests", "Интересы"),
+    "interests_selected": ("Selected: {interests}", "Выбрано: {interests}"),
+    "interests_none": ("none yet", "пока ничего"),
+    "interests_limit": (
+        "Choose no more than 5 interests. Remove one to choose another.",
+        "Можно выбрать не более 5 интересов. Сними один, чтобы выбрать другой.",
+    ),
+    "interest_music": ("Music", "Музыка"),
+    "interest_movies": ("Movies", "Кино"),
+    "interest_books": ("Books", "Книги"),
+    "interest_gaming": ("Gaming", "Игры"),
+    "interest_sports": ("Sports", "Спорт"),
+    "interest_travel": ("Travel", "Путешествия"),
+    "interest_art": ("Art", "Искусство"),
+    "interest_tech": ("Technology", "Технологии"),
+    "interest_cooking": ("Cooking", "Кулинария"),
+    "interest_nature": ("Nature", "Природа"),
+    "interest_study": ("Learning", "Учёба"),
+    "interest_fitness": ("Fitness", "Фитнес"),
+    "done": ("Done", "Готово"),
     "bio": (
         "Tell people about yourself. Up to 500 characters, or tap Skip. Avoid putting private contact details here.",
         "Расскажи о себе — до 500 символов, или нажми «Пропустить». Не указывай здесь личные контакты.",
@@ -155,12 +188,12 @@ TEXT = {
     "slow": ("One moment, please.", "Подожди немного."),
     "choose_language": ("Choose your language / Выбери язык", "Выбери язык / Choose your language"),
     "privacy": (
-        "We store your Telegram ID/username, language, profile details, one Telegram photo file ID, preferences, likes, blocks, matches and reports in the bot's database. Your public profile is shown to eligible members; your Telegram contact is shared after a mutual like. /pause hides your profile. /delete removes your data and anonymizes reports; a minimal banned-account record may be retained. Telegram messages and operator backups are not automatically erased. Never share payment details or sensitive documents. Age is self-declared; reports are reviewed by the operator.",
-        "В базе бота хранятся Telegram ID/имя пользователя, язык, анкета, ссылка file_id на одно фото Telegram, настройки, лайки, блокировки, пары и жалобы. Анкету видят подходящие участники; контакт Telegram открывается при взаимной симпатии. /pause скрывает анкету. /delete удаляет данные и обезличивает жалобы; минимальная запись о блокировке может сохраняться. Сообщения Telegram и резервные копии оператора автоматически не удаляются. Не передавай платёжные данные или личные документы. Возраст указывается пользователем; жалобы проверяет оператор.",
+        "We store your Telegram ID/username, language, profile, chosen interests and dating purpose, one Telegram photo file ID, preferences, likes, blocks, matches and reports. Activity time and profile-view history help personalize suggestions and are not shown to other members. Your public profile, including interests and dating purpose, is shown to eligible members; your Telegram contact is shared after a mutual like. /pause hides your profile. /delete removes your data, including view history, and anonymizes reports; a minimal banned-account record may be retained. Telegram messages and operator backups are not automatically erased. Age is self-declared; reports are reviewed by the operator.",
+        "Бот хранит Telegram ID/имя пользователя, язык, анкету, выбранные интересы и цель знакомства, ссылку file_id на фото Telegram, настройки, лайки, блокировки, пары и жалобы. Время активности и история показов помогают подбирать анкеты и не видны другим участникам. Анкету, включая интересы и цель знакомства, видят подходящие участники; контакт Telegram открывается при взаимной симпатии. /pause скрывает анкету. /delete удаляет данные, в том числе историю показов, и обезличивает жалобы; минимальная запись о блокировке может сохраняться. Сообщения Telegram и резервные копии оператора автоматически не удаляются. Возраст указывается пользователем; жалобы проверяет оператор.",
     ),
     "help": (
-        "/start — menu or registration\n/browse — randomized discovery\n/likes — incoming likes\n/matches — mutual matches\n/profile — your profile\n/edit — edit profile\n/filters — age and city\n/pause — hide profile\n/resume — show profile\n/language — English / Russian\n/cancel — discard draft\n/delete — delete your data\n/privacy — data information\n/id — your Telegram ID\n\nUse the buttons on the latest profile card to like, skip, block or report. Contact links appear after a mutual like; Telegram privacy settings can affect opening them.",
-        "/start — меню или регистрация\n/browse — случайные анкеты\n/likes — входящие лайки\n/matches — взаимные симпатии\n/profile — твоя анкета\n/edit — изменить анкету\n/filters — возраст и город\n/pause — скрыть анкету\n/resume — показывать анкету\n/language — русский / English\n/cancel — отменить изменения\n/delete — удалить данные\n/privacy — о данных\n/id — твой Telegram ID\n\nКнопки под последней анкетой: лайк, пропуск, блокировка или жалоба. Контакты открываются после взаимной симпатии; переход может зависеть от настроек приватности Telegram.",
+        "/start — menu or registration\n/browse — people suggested for you\n/likes — incoming likes\n/matches — mutual matches\n/profile — your profile\n/edit — edit profile, interests and dating purpose\n/filters — age and city\n/pause — hide profile\n/resume — show profile\n/language — English / Russian\n/cancel — discard draft\n/delete — delete your data\n/privacy — data information\n/id — your Telegram ID\n\nUse the buttons on the latest profile card to like, skip, block or report. Contact links appear after a mutual like; Telegram privacy settings can affect opening them.",
+        "/start — меню или регистрация\n/browse — подбор подходящих людей\n/likes — входящие лайки\n/matches — взаимные симпатии\n/profile — твоя анкета\n/edit — анкета, интересы и цель знакомства\n/filters — возраст и город\n/pause — скрыть анкету\n/resume — показывать анкету\n/language — русский / English\n/cancel — отменить изменения\n/delete — удалить данные\n/privacy — о данных\n/id — твой Telegram ID\n\nКнопки под последней анкетой: лайк, пропуск, блокировка или жалоба. Контакты открываются после взаимной симпатии; переход может зависеть от настроек приватности Telegram.",
     ),
 }
 

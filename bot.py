@@ -14,6 +14,7 @@ from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filt
 
 from config import Settings
 from db.database import Database
+from db.models import normalize_interests
 from handlers.browse import BrowseFlow
 from handlers.profile import ProfileFlow
 from i18n import tr
@@ -45,9 +46,21 @@ class MatchBot:
         caption = f"<b>{html.escape(profile['name'])}, {profile['age']}</b> · {html.escape(profile['city'])}"
         plain_caption = f"{profile['name']}, {profile['age']} · {profile['city']}"
         heading = caption
+        lang = self.db.user(uid)["lang"]
+        details = []
+        if profile.get("purpose", "any") != "any":
+            details.append(tr(lang, "purpose_label") + ": " + tr(lang, "purpose_" + profile["purpose"]))
+        interests = normalize_interests(profile.get("interests", []))
+        if interests:
+            details.append(
+                tr(lang, "interests_label") + ": " + ", ".join(tr(lang, "interest_" + tag) for tag in interests)
+            )
+        body = "\n".join(details)
         if profile.get("bio"):
-            caption += "\n\n" + html.escape(profile["bio"])
-            plain_caption += "\n\n" + profile["bio"]
+            body = "\n\n".join(part for part in (body, profile["bio"]) if part)
+        if body:
+            caption += "\n\n" + html.escape(body)
+            plain_caption += "\n\n" + body
         # Telegram measures the decoded caption in UTF-16 units; an otherwise
         # valid 500-character emoji bio can exceed its 1024-unit photo limit.
         split_bio = len(plain_caption.encode("utf-16-le")) // 2 > 1024
@@ -65,7 +78,7 @@ class MatchBot:
             await self.send(uid, caption, parse_mode="HTML", reply_markup=keyboard)
         else:
             if split_bio:
-                await self.send(uid, html.escape(profile["bio"]), parse_mode="HTML", reply_markup=keyboard)
+                await self.send(uid, html.escape(body), parse_mode="HTML", reply_markup=keyboard)
 
     async def menu(self, uid):
         user = self.db.user(uid)

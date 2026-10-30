@@ -6,7 +6,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-from db.models import MAX_AGE, MIN_AGE, validate_profile
+from db.models import MAX_AGE, MIN_AGE, normalize_interests, validate_profile
+from matching import choose_candidate
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -60,8 +61,18 @@ CREATE TABLE IF NOT EXISTS outbox (
  delivered INTEGER NOT NULL DEFAULT 0, UNIQUE(recipient,other,kind)
 );
 CREATE INDEX IF NOT EXISTS pending_outbox ON outbox(delivered,due);
-PRAGMA user_version = 1;
 """
+
+IMPRESSION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS impressions (
+ actor INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ target INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ last_shown REAL NOT NULL,
+ PRIMARY KEY(actor,target), CHECK(actor != target)
+)
+"""
+SCHEMA_VERSION = 2
+EXPOSURE_COOLDOWN = 86400
 
 
 class Database:
@@ -72,24 +83,53 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
-        if self.conn.execute("PRAGMA user_version").fetchone()[0] > 1:
-            raise RuntimeError("Database was created by a newer bot version")
-        self.conn.executescript(SCHEMA)
+        try:
+            # DDL and the version marker commit together. Running statements
+            # individually avoids executescript's implicit pre-transaction commit.
+            with self.conn:
+                self.conn.execute("BEGIN IMMEDIATE")
+                version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+                if version > SCHEMA_VERSION:
+                    raise RuntimeError("Database was created by a newer bot version")
+                for statement in SCHEMA.split(";"):
+                    if statement.strip():
+                        self.conn.execute(statement)
+                if version < 2:
+                    columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(users)")}
+                    for name, definition in (
+                        ("interests", "TEXT NOT NULL DEFAULT '[]'"),
+                        ("purpose", "TEXT NOT NULL DEFAULT 'any'"),
+                        ("last_active", "REAL NOT NULL DEFAULT 0"),
+                    ):
+                        if name not in columns:
+                            self.conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+                self.conn.execute(IMPRESSION_SCHEMA)
+                self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        except Exception:
+            self.conn.close()
+            raise
 
     def close(self):
         self.conn.close()
 
     def user(self, uid):
         row = self.conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-        return dict(row) if row else None
+        return self._profile(row) if row else None
+
+    @staticmethod
+    def _profile(row):
+        profile = dict(row)
+        profile["interests"] = normalize_interests(profile.get("interests", "[]"))
+        return profile
 
     def touch(self, uid, username=None, lang="en"):
         with self.conn:
             self.conn.execute(
-                "INSERT INTO users(id,username,lang,created) VALUES(?,?,?,?) "
+                "INSERT INTO users(id,username,lang,created,last_active) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET username=CASE WHEN users.banned=0 THEN excluded.username ELSE users.username END,"
-                "reachable=CASE WHEN users.banned=0 THEN 1 ELSE users.reachable END",
-                (uid, username, "ru" if lang.startswith("ru") else "en", time.time()),
+                "reachable=CASE WHEN users.banned=0 THEN 1 ELSE users.reachable END,"
+                "last_active=CASE WHEN users.banned=0 THEN excluded.last_active ELSE users.last_active END",
+                (uid, username, "ru" if lang.startswith("ru") else "en", time.time(), time.time()),
             )
         return self.user(uid)
 
@@ -135,7 +175,7 @@ class Database:
         with self.conn:
             self.conn.execute(
                 "UPDATE users SET name=?,age=?,gender=?,seeking=?,city=?,city_key=?,bio=?,"
-                "photo=?,consent=1,active=? WHERE id=?",
+                "photo=?,interests=?,purpose=?,consent=1,active=? WHERE id=?",
                 (
                     data["name"],
                     int(data["age"]),
@@ -145,6 +185,8 @@ class Database:
                     data["city"].casefold(),
                     data["bio"],
                     data["photo"],
+                    json.dumps(data["interests"]),
+                    data["purpose"],
                     current["active"] if current["photo"] else 1,
                     uid,
                 ),
@@ -178,11 +220,14 @@ class Database:
         return True
 
     def candidates(self, uid, mode="feed", skip_days=7):
-        # Both people's preferences apply. ORDER BY RANDOM gives each eligible profile
-        # the same chance; a skip can reappear after the configured cooldown.
-        return self.conn.execute(
+        if mode not in {"feed", "likes"}:
+            raise ValueError("Invalid discovery mode")
+        now = time.time()
+        # These are hard mutual requirements; ranking can never override them.
+        rows = self.conn.execute(
             """
-            SELECT p.* FROM users p JOIN users me ON me.id=?
+            SELECT p.*,i.last_shown FROM users p JOIN users me ON me.id=?
+            LEFT JOIN impressions i ON i.actor=me.id AND i.target=p.id
             WHERE p.id!=me.id AND p.active=1 AND p.banned=0 AND p.photo IS NOT NULL
               AND p.consent=1 AND me.active=1 AND me.banned=0 AND me.photo IS NOT NULL
               AND p.age BETWEEN me.min_age AND me.max_age
@@ -199,10 +244,29 @@ class Database:
                 a=min(me.id,p.id) AND b=max(me.id,p.id))
               AND (?='feed' OR EXISTS(SELECT 1 FROM reactions WHERE
                 actor=p.id AND target=me.id AND kind='like'))
-            ORDER BY RANDOM() LIMIT 1
         """,
-            (uid, time.time() - skip_days * 86400, mode),
-        ).fetchone()
+            (uid, now - skip_days * 86400, mode),
+        ).fetchall()
+        if not rows:
+            return None
+        profiles = [self._profile(row) for row in rows]
+        fresh = [p for p in profiles if p["last_shown"] is None or p["last_shown"] <= now - EXPOSURE_COOLDOWN]
+        if fresh:
+            pool = fresh
+        else:
+            # When the pool is exhausted, rotate through its oldest impressions.
+            oldest = min(p["last_shown"] for p in profiles)
+            pool = [p for p in profiles if p["last_shown"] <= oldest + 0.001]
+        liked_profiles = [
+            self._profile(row)
+            for row in self.conn.execute(
+                "SELECT p.* FROM reactions r JOIN users p ON p.id=r.target "
+                "WHERE r.actor=? AND r.kind='like' AND p.photo IS NOT NULL AND p.banned=0 "
+                "ORDER BY r.created DESC,r.target LIMIT 30",
+                (uid,),
+            )
+        ]
+        return choose_candidate(self.user(uid), pool, liked_profiles=liked_profiles, now=now)
 
     def present(self, uid, mode="feed", skip_days=7):
         row = self.candidates(uid, mode, skip_days)
@@ -213,6 +277,11 @@ class Database:
         token = secrets.token_hex(8)
         with self.conn:
             self.conn.execute("INSERT OR REPLACE INTO views VALUES(?,?,?,?)", (uid, row["id"], token, mode))
+            self.conn.execute(
+                "INSERT INTO impressions(actor,target,last_shown) VALUES(?,?,?) "
+                "ON CONFLICT(actor,target) DO UPDATE SET last_shown=excluded.last_shown",
+                (uid, row["id"], time.time()),
+            )
         return dict(row), token
 
     def view(self, uid, token):
@@ -328,7 +397,7 @@ class Database:
 
     def matches(self, uid, offset=0):
         return [
-            dict(row)
+            self._profile(row)
             for row in self.conn.execute(
                 "SELECT u.* FROM matches m JOIN users u ON u.id=CASE WHEN m.a=? THEN m.b ELSE m.a END "
                 "WHERE (m.a=? OR m.b=?) AND u.banned=0 ORDER BY m.created DESC,m.a,m.b LIMIT 6 OFFSET ?",
@@ -347,7 +416,7 @@ class Database:
             if self.user(uid)["banned"]:
                 self.conn.execute(
                     "UPDATE users SET name=NULL,age=NULL,gender=NULL,city=NULL,city_key=NULL,"
-                    "bio=NULL,photo=NULL,username=NULL,consent=0,active=0 WHERE id=?",
+                    "bio=NULL,photo=NULL,username=NULL,consent=0,active=0,interests='[]',purpose='any',last_active=0 WHERE id=?",
                     (uid,),
                 )
                 for table, col in (("sessions", "user_id"), ("views", "actor")):
@@ -358,6 +427,7 @@ class Database:
                     ("blocks", "actor", "target"),
                     ("matches", "a", "b"),
                     ("outbox", "recipient", "other"),
+                    ("impressions", "actor", "target"),
                 ):
                     self.conn.execute(f"DELETE FROM {table} WHERE {first}=? OR {second}=?", (uid, uid))
                 self.conn.execute("UPDATE reports SET actor=NULL WHERE actor=?", (uid,))

@@ -55,3 +55,18 @@ def test_telegram_retry_after_pauses_entire_notification_queue(db):
     asyncio.run(scenario())
     assert bot.application.bot.send_message.await_count == 2
     assert db.conn.execute("SELECT count(*) FROM outbox WHERE delivered=0").fetchone()[0] == 1
+
+
+def test_profile_card_shows_interests_and_goal_in_viewers_language(db):
+    member(db, 1)
+    db.set_user(1, lang="ru")
+    profile = member(db, 2, interests=["books", "nature"], purpose="friendship")
+    bot = service(db)
+    asyncio.run(bot.card(1, profile))
+    caption = bot.application.bot.send_photo.call_args.kwargs["caption"]
+    from i18n import tr
+
+    assert tr("ru", "purpose_friendship") in caption
+    assert tr("ru", "interest_books") in caption
+    assert tr("ru", "interest_nature") in caption
+    assert "friendship" not in caption
