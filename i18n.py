@@ -1,0 +1,169 @@
+"""All member-facing copy in English and Russian."""
+
+TEXT = {
+    "welcome": (
+        "Meet someone new. Create your profile, browse, and like people. When you both like each other, you both get a contact link.",
+        "Знакомься с новыми людьми. Создай анкету, листай и ставь лайки. При взаимной симпатии вы оба получите ссылку для общения.",
+    ),
+    "menu": ("What would you like to do?", "Что хочешь сделать?"),
+    "browse": ("🔎 Discover", "🔎 Смотреть анкеты"),
+    "likes": ("💌 Who likes me", "💌 Меня лайкнули"),
+    "matches": ("💕 My matches", "💕 Взаимные симпатии"),
+    "profile": ("👤 My profile", "👤 Моя анкета"),
+    "edit": ("✏️ Edit profile", "✏️ Изменить анкету"),
+    "filters": ("⚙️ Search filters", "⚙️ Фильтры поиска"),
+    "language": ("🌐 Language / Язык", "🌐 Язык / Language"),
+    "pause": ("⏸ Pause profile", "⏸ Скрыть анкету"),
+    "resume": ("▶️ Show my profile", "▶️ Показывать анкету"),
+    "delete": ("🗑 Delete my data", "🗑 Удалить мои данные"),
+    "home": ("🏠 Menu", "🏠 Меню"),
+    "create": ("Create profile", "Создать анкету"),
+    "consent": (
+        "This bot is for adults aged 18+. By continuing, you confirm that you are 18 or older and agree to your name, age, city, bio and photo being shown to other members. Your Telegram contact is shared after a mutual like. Use /privacy for data details and /cancel to leave.",
+        "Бот только для людей от 18 лет. Продолжая, ты подтверждаешь, что тебе есть 18, и соглашаешься на показ имени, возраста, города, описания и фото другим участникам. Контакт Telegram открывается при взаимной симпатии. Подробнее: /privacy. Отмена: /cancel.",
+    ),
+    "agree": ("I am 18+ and agree", "Мне есть 18, я согласен(-на)"),
+    "name": ("What name should your profile show? (1–40 characters)", "Как тебя называть в анкете? (1–40 символов)"),
+    "age": ("How old are you? Enter a number from 18 to 100.", "Сколько тебе лет? Введи число от 18 до 100."),
+    "gender": ("Choose your gender.", "Укажи свой пол."),
+    "seeking": ("Who would you like to meet?", "С кем хочешь знакомиться?"),
+    "male": ("Men", "Парни"),
+    "female": ("Women", "Девушки"),
+    "other": ("Other", "Другой"),
+    "any": ("Everyone", "Все"),
+    "city": (
+        "Your city? (2–60 characters; use the same spelling as people nearby)",
+        "Из какого ты города? (2–60 символов; используй общепринятое название)",
+    ),
+    "bio": (
+        "Tell people about yourself. Up to 500 characters, or tap Skip. Avoid putting private contact details here.",
+        "Расскажи о себе — до 500 символов, или нажми «Пропустить». Не указывай здесь личные контакты.",
+    ),
+    "photo": (
+        "Send one clear profile photo as a photo, not a file.",
+        "Пришли одно чёткое фото для анкеты как фотографию, а не файл.",
+    ),
+    "preview": ("Here is your profile. Publish it?", "Вот твоя анкета. Сохранить?"),
+    "publish": ("✅ Save profile", "✅ Сохранить анкету"),
+    "saved": ("Your profile is saved.", "Анкета сохранена."),
+    "keep": ("Keep current value", "Оставить как есть"),
+    "skip": ("Skip", "Пропустить"),
+    "cancel": ("Cancel", "Отмена"),
+    "cancelled": ("Cancelled. Your saved profile is unchanged.", "Отменено. Сохранённая анкета не изменилась."),
+    "invalid": (
+        "That doesn't look right. Please follow the prompt above.",
+        "Не получилось принять ответ. Следуй подсказке выше.",
+    ),
+    "age_invalid": (
+        "Registration is only available from age 18. Enter your real age (18–100), or /cancel.",
+        "Регистрация доступна только с 18 лет. Укажи настоящий возраст (18–100) или /cancel.",
+    ),
+    "need_profile": ("Create a profile first with /start.", "Сначала создай анкету: /start."),
+    "paused": (
+        "Your profile is hidden. Resume it to browse and receive new likes.",
+        "Анкета скрыта. Включи показ, чтобы смотреть анкеты и получать новые лайки.",
+    ),
+    "resumed": ("Your profile is visible again.", "Твоя анкета снова видна."),
+    "active_status": ("Status: visible", "Статус: видна"),
+    "paused_status": ("Status: hidden", "Статус: скрыта"),
+    "empty_feed": (
+        "No more compatible profiles right now. Try broader filters or come back later. Skipped profiles can return after {days} days.",
+        "Подходящих анкет пока нет. Расширь фильтры или зайди позже. Пропущенные анкеты могут вернуться через {days} дн.",
+    ),
+    "empty_likes": (
+        "No unanswered likes matching your current preferences. Check back later.",
+        "Пока нет новых лайков от людей, подходящих под твои настройки. Загляни позже.",
+    ),
+    "like": ("❤️ Like", "❤️ Нравится"),
+    "pass": ("➡️ Next", "➡️ Дальше"),
+    "block": ("🚫 Block", "🚫 Заблокировать"),
+    "report": ("⚑ Report", "⚑ Пожаловаться"),
+    "report_prompt": (
+        "Why are you reporting this profile? Reporting also blocks this person.",
+        "Почему ты жалуешься на анкету? Жалоба также заблокирует этого человека.",
+    ),
+    "spam": ("Spam or scam", "Спам или мошенничество"),
+    "underage": ("Under 18", "Младше 18 лет"),
+    "abuse": ("Abuse or inappropriate content", "Оскорбления или недопустимый контент"),
+    "reported": (
+        "Report saved for review. This person is blocked.",
+        "Жалоба сохранена для проверки. Этот человек заблокирован.",
+    ),
+    "blocked": (
+        "This person is blocked and removed from your matches.",
+        "Этот человек заблокирован и удалён из взаимных симпатий.",
+    ),
+    "blocked_list": ("🚫 Blocked people", "🚫 Заблокированные"),
+    "unblock": ("Unblock", "Разблокировать"),
+    "unblocked": (
+        "Unblocked. Previous likes and matches are not restored.",
+        "Пользователь разблокирован. Прежние лайки и пары не восстановлены.",
+    ),
+    "no_blocks": ("You have no blocked people.", "У тебя нет заблокированных пользователей."),
+    "liked": ("Like saved ❤️", "Лайк сохранён ❤️"),
+    "stale": (
+        "This card has expired. Open /browse or /likes for a fresh card.",
+        "Эта карточка устарела. Открой /browse или /likes, чтобы получить новую.",
+    ),
+    "new_like": (
+        "💌 Someone liked your profile! Open /likes to see who.",
+        "💌 Кому-то понравилась твоя анкета! Открой /likes, чтобы узнать кому.",
+    ),
+    "match_notice": (
+        "💕 It's a match! You and {name} like each other.\n{contact}\nOpen /matches to find this person again.",
+        "💕 Взаимная симпатия! Вы с {name} понравились друг другу.\n{contact}\nЭтот контакт можно снова найти в /matches.",
+    ),
+    "contact": ("Open Telegram profile", "Открыть профиль Telegram"),
+    "no_matches": (
+        "No matches yet. Like people in /browse; when they like you back, you both get notified.",
+        "Взаимных симпатий пока нет. Ставь лайки в /browse — когда тебе ответят взаимностью, вы оба получите уведомление.",
+    ),
+    "more": ("More", "Ещё"),
+    "range": (
+        "Enter an age range, for example 18-35. Allowed ages: 18–100.",
+        "Введи диапазон возраста, например 18-35. Допустимый возраст: 18–100.",
+    ),
+    "location": (
+        "Where should we search? Both people's preferences must match.",
+        "Где искать? Настройки поиска обоих людей должны совпадать.",
+    ),
+    "local": ("My city only", "Только мой город"),
+    "everywhere": ("All cities", "Все города"),
+    "filter_status": (
+        "Current filters: {low}–{high}, {location}. Gender preferences are in Edit profile.",
+        "Текущие фильтры: {low}–{high}, {location}. Кого искать — в редактировании анкеты.",
+    ),
+    "filters_saved": ("Search filters updated.", "Фильтры поиска обновлены."),
+    "delete_confirm": (
+        "Delete your profile, photos stored by the bot, likes, matches and settings? This cannot be undone. Messages already sent in Telegram are not deleted.",
+        "Удалить анкету, сохранённые ботом ссылки на фото, лайки, пары и настройки? Это действие нельзя отменить. Уже отправленные сообщения в Telegram останутся.",
+    ),
+    "delete_yes": ("Yes, delete my data", "Да, удалить мои данные"),
+    "deleted": (
+        "Your data has been deleted. Use /start if you want to register again.",
+        "Твои данные удалены. Для новой регистрации используй /start.",
+    ),
+    "banned": (
+        "Your account is suspended. Contact the bot administrator if you believe this is a mistake.",
+        "Твой аккаунт заблокирован. Если это ошибка, свяжись с администратором бота.",
+    ),
+    "private": ("Please open a private chat with this bot.", "Открой личный чат с ботом."),
+    "error": (
+        "Something went wrong. Please try again, or use /start. Your saved data is safe.",
+        "Произошла ошибка. Попробуй ещё раз или используй /start. Сохранённые данные не потеряны.",
+    ),
+    "slow": ("One moment, please.", "Подожди немного."),
+    "choose_language": ("Choose your language / Выбери язык", "Выбери язык / Choose your language"),
+    "privacy": (
+        "We store your Telegram ID/username, language, profile details, one Telegram photo file ID, preferences, likes, blocks, matches and reports in the bot's database. Your public profile is shown to eligible members; your Telegram contact is shared after a mutual like. /pause hides your profile. /delete removes your data and anonymizes reports; a minimal banned-account record may be retained. Telegram messages and operator backups are not automatically erased. Never share payment details or sensitive documents. Age is self-declared; reports are reviewed by the operator.",
+        "В базе бота хранятся Telegram ID/имя пользователя, язык, анкета, ссылка file_id на одно фото Telegram, настройки, лайки, блокировки, пары и жалобы. Анкету видят подходящие участники; контакт Telegram открывается при взаимной симпатии. /pause скрывает анкету. /delete удаляет данные и обезличивает жалобы; минимальная запись о блокировке может сохраняться. Сообщения Telegram и резервные копии оператора автоматически не удаляются. Не передавай платёжные данные или личные документы. Возраст указывается пользователем; жалобы проверяет оператор.",
+    ),
+    "help": (
+        "/start — menu or registration\n/browse — randomized discovery\n/likes — incoming likes\n/matches — mutual matches\n/profile — your profile\n/edit — edit profile\n/filters — age and city\n/pause — hide profile\n/resume — show profile\n/language — English / Russian\n/cancel — discard draft\n/delete — delete your data\n/privacy — data information\n/id — your Telegram ID\n\nUse the buttons on the latest profile card to like, skip, block or report. Contact links appear after a mutual like; Telegram privacy settings can affect opening them.",
+        "/start — меню или регистрация\n/browse — случайные анкеты\n/likes — входящие лайки\n/matches — взаимные симпатии\n/profile — твоя анкета\n/edit — изменить анкету\n/filters — возраст и город\n/pause — скрыть анкету\n/resume — показывать анкету\n/language — русский / English\n/cancel — отменить изменения\n/delete — удалить данные\n/privacy — о данных\n/id — твой Telegram ID\n\nКнопки под последней анкетой: лайк, пропуск, блокировка или жалоба. Контакты открываются после взаимной симпатии; переход может зависеть от настроек приватности Telegram.",
+    ),
+}
+
+
+def tr(lang, key, **kwargs):
+    return TEXT[key][1 if lang == "ru" else 0].format(**kwargs)
