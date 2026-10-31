@@ -9,6 +9,8 @@ import json
 import math
 import random
 import time
+from collections import Counter
+from dataclasses import dataclass, field
 from itertools import islice
 
 from db.models import INTERESTS, PURPOSES
@@ -49,6 +51,68 @@ def _overlap(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
+@dataclass(slots=True)
+class _ScoringContext:
+    interests: frozenset
+    purpose: str | None
+    city: str
+    age: float | None
+    now: float | None
+    liked_interests: tuple
+    liked_count: int
+    # Request-local only: changes to profiles and reactions are visible on the
+    # next discovery request. At most 2**12 interest sets can occur.
+    interest_bonuses: dict = field(default_factory=dict)
+
+
+def _prepare_context(viewer, liked_profiles, now):
+    liked = Counter(_interests(profile) for profile in islice(liked_profiles, MAX_LIKED_PROFILES))
+    liked.pop(frozenset(), None)
+    return _ScoringContext(
+        interests=_interests(viewer),
+        purpose=viewer.get("purpose"),
+        city=_city(viewer),
+        age=_number(viewer.get("age")),
+        now=_number(now) if now is not None else time.time(),
+        liked_interests=tuple(liked.items()),
+        liked_count=sum(liked.values()),
+    )
+
+
+def _score_prepared(context, candidate):
+    interests = _interests(candidate)
+    bonuses = context.interest_bonuses.get(interests)
+    if bonuses is None:
+        shared = 5.0 * _overlap(context.interests, interests)
+        learned = 0.0
+        if interests and context.liked_count:
+            learned = sum(_overlap(interests, values) * count for values, count in context.liked_interests)
+            learned /= context.liked_count
+        bonuses = context.interest_bonuses[interests] = (shared, learned)
+    score = 1.0 + bonuses[0]
+
+    if context.purpose in KNOWN_PURPOSES and context.purpose == candidate.get("purpose"):
+        score += 3.0
+
+    if context.city and context.city == _city(candidate):
+        score += 1.5
+
+    candidate_age = _number(candidate.get("age"))
+    if (
+        context.age is not None
+        and candidate_age is not None
+        and 18 <= context.age <= 100
+        and 18 <= candidate_age <= 100
+    ):
+        score += math.exp(-abs(context.age - candidate_age) / 8.0)
+
+    timestamp = _number(candidate.get("last_active"))
+    if timestamp is not None and timestamp > 0 and context.now is not None:
+        days_ago = max(0.0, context.now - timestamp) / 86400.0
+        score += 0.5 / (1.0 + days_ago / 7.0)
+    return score + bonuses[1]
+
+
 def score_candidate(viewer, candidate, liked_profiles=(), now=None):
     """Return a positive discovery weight from explicit profile data.
 
@@ -58,33 +122,7 @@ def score_candidate(viewer, candidate, liked_profiles=(), now=None):
     attributes, photo analysis, popularity score or paid ranking is used.
     ``liked_profiles`` must be ordered newest first by the caller.
     """
-    score = 1.0
-    interests = _interests(candidate)
-    score += 5.0 * _overlap(_interests(viewer), interests)
-
-    purpose = viewer.get("purpose")
-    if purpose in KNOWN_PURPOSES and purpose == candidate.get("purpose"):
-        score += 3.0
-
-    viewer_city, candidate_city = _city(viewer), _city(candidate)
-    if viewer_city and viewer_city == candidate_city:
-        score += 1.5
-
-    viewer_age, candidate_age = _number(viewer.get("age")), _number(candidate.get("age"))
-    if viewer_age is not None and candidate_age is not None and 18 <= viewer_age <= 100 and 18 <= candidate_age <= 100:
-        score += math.exp(-abs(viewer_age - candidate_age) / 8.0)
-
-    timestamp = _number(candidate.get("last_active"))
-    current_time = _number(now) if now is not None else time.time()
-    if timestamp is not None and timestamp > 0 and current_time is not None:
-        days_ago = max(0.0, current_time - timestamp) / 86400.0
-        score += 0.5 / (1.0 + days_ago / 7.0)
-
-    liked_interests = [_interests(profile) for profile in islice(liked_profiles, MAX_LIKED_PROFILES)]
-    liked_interests = [values for values in liked_interests if values]
-    if interests and liked_interests:
-        score += sum(_overlap(interests, values) for values in liked_interests) / len(liked_interests)
-    return score
+    return _score_prepared(_prepare_context(viewer, liked_profiles, now), candidate)
 
 
 def choose_candidate(viewer, candidates, liked_profiles=(), now=None, rng=None):
@@ -100,7 +138,6 @@ def choose_candidate(viewer, candidates, liked_profiles=(), now=None, rng=None):
     rng = rng if rng is not None else random
     if rng.random() < EXPLORATION_RATE:
         return rng.choice(candidates)
-    liked_profiles = tuple(islice(liked_profiles, MAX_LIKED_PROFILES))
-    now = time.time() if now is None else now
-    weights = [score_candidate(viewer, profile, liked_profiles, now) for profile in candidates]
+    context = _prepare_context(viewer, liked_profiles, now)
+    weights = [_score_prepared(context, profile) for profile in candidates]
     return rng.choices(candidates, weights=weights, k=1)[0]

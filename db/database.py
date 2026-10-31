@@ -71,8 +71,29 @@ CREATE TABLE IF NOT EXISTS impressions (
  PRIMARY KEY(actor,target), CHECK(actor != target)
 )
 """
-SCHEMA_VERSION = 2
+SCALE_INDEXES = """
+CREATE INDEX IF NOT EXISTS discover_age ON users(age,id)
+ WHERE active=1 AND banned=0 AND consent=1 AND photo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS discover_gender_age ON users(gender,age,id)
+ WHERE active=1 AND banned=0 AND consent=1 AND photo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS discover_city_age ON users(city_key,age,id)
+ WHERE active=1 AND banned=0 AND consent=1 AND photo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS discover_city_gender_age ON users(city_key,gender,age,id)
+ WHERE active=1 AND banned=0 AND consent=1 AND photo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS incoming_like_candidates ON reactions(target,kind,actor);
+CREATE INDEX IF NOT EXISTS recent_outgoing_likes ON reactions(actor,kind,created DESC,target);
+CREATE INDEX IF NOT EXISTS views_by_target ON views(target);
+CREATE INDEX IF NOT EXISTS matches_by_b ON matches(b,a);
+CREATE INDEX IF NOT EXISTS blocks_by_target ON blocks(target,actor);
+CREATE INDEX IF NOT EXISTS outbox_by_other ON outbox(other);
+CREATE INDEX IF NOT EXISTS impressions_by_target ON impressions(target,actor);
+CREATE INDEX IF NOT EXISTS impressions_by_actor_time ON impressions(actor,last_shown,target);
+CREATE INDEX IF NOT EXISTS reports_by_target ON reports(target);
+CREATE INDEX IF NOT EXISTS reports_open ON reports(resolved,id);
+"""
+SCHEMA_VERSION = 3
 EXPOSURE_COOLDOWN = 86400
+RANKING_SAMPLE_SIZE = 256
 
 
 class Database:
@@ -104,6 +125,9 @@ class Database:
                         if name not in columns:
                             self.conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
                 self.conn.execute(IMPRESSION_SCHEMA)
+                for statement in SCALE_INDEXES.split(";"):
+                    if statement.strip():
+                        self.conn.execute(statement)
                 self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         except Exception:
             self.conn.close()
@@ -219,54 +243,84 @@ class Database:
                 return False
         return True
 
+    @staticmethod
+    def _discovery_query(viewer, mode, now, skip_days):
+        params = {
+            "uid": viewer["id"],
+            "age": viewer["age"],
+            "gender": viewer["gender"],
+            "seeking": viewer["seeking"],
+            "min_age": viewer["min_age"],
+            "max_age": viewer["max_age"],
+            "city": viewer["city_key"],
+            "reaction_cutoff": now - skip_days * 86400,
+            "exposure_cutoff": now - EXPOSURE_COOLDOWN,
+            "limit": RANKING_SAMPLE_SIZE,
+        }
+        # An incoming inbox starts at its indexed reactions, not at every user.
+        source = (
+            "FROM reactions incoming CROSS JOIN users p ON p.id=incoming.actor " if mode == "likes" else "FROM users p "
+        )
+        source += "LEFT JOIN impressions i ON i.actor=:uid AND i.target=p.id "
+        source += """
+            WHERE p.id!=:uid AND p.active=1 AND p.banned=0 AND p.photo IS NOT NULL AND p.consent=1
+              AND p.age BETWEEN :min_age AND :max_age AND :age BETWEEN p.min_age AND p.max_age
+              AND (p.seeking='any' OR p.seeking=:gender)
+              AND (p.local_only=0 OR p.city_key=:city)
+              AND NOT EXISTS(SELECT 1 FROM blocks WHERE actor=:uid AND target=p.id)
+              AND NOT EXISTS(SELECT 1 FROM blocks WHERE actor=p.id AND target=:uid)
+              AND NOT EXISTS(SELECT 1 FROM reactions WHERE actor=:uid AND target=p.id
+                AND (kind='like' OR created>:reaction_cutoff))
+              AND NOT EXISTS(SELECT 1 FROM matches WHERE a=min(:uid,p.id) AND b=max(:uid,p.id))
+        """
+        if mode == "likes":
+            source += " AND incoming.target=:uid AND incoming.kind='like'"
+        if viewer["seeking"] != "any":
+            source += " AND p.gender=:seeking"
+        if viewer["local_only"]:
+            source += " AND p.city_key=:city"
+        return source, params
+
     def candidates(self, uid, mode="feed", skip_days=7):
         if mode not in {"feed", "likes"}:
             raise ValueError("Invalid discovery mode")
-        now = time.time()
-        # These are hard mutual requirements; ranking can never override them.
-        rows = self.conn.execute(
-            """
-            SELECT p.*,i.last_shown FROM users p JOIN users me ON me.id=?
-            LEFT JOIN impressions i ON i.actor=me.id AND i.target=p.id
-            WHERE p.id!=me.id AND p.active=1 AND p.banned=0 AND p.photo IS NOT NULL
-              AND p.consent=1 AND me.active=1 AND me.banned=0 AND me.photo IS NOT NULL
-              AND p.age BETWEEN me.min_age AND me.max_age
-              AND me.age BETWEEN p.min_age AND p.max_age
-              AND (me.seeking='any' OR me.seeking=p.gender)
-              AND (p.seeking='any' OR p.seeking=me.gender)
-              AND (me.local_only=0 OR me.city_key=p.city_key)
-              AND (p.local_only=0 OR me.city_key=p.city_key)
-              AND NOT EXISTS(SELECT 1 FROM blocks WHERE
-                (actor=me.id AND target=p.id) OR (actor=p.id AND target=me.id))
-              AND NOT EXISTS(SELECT 1 FROM reactions WHERE actor=me.id AND target=p.id
-                AND (kind='like' OR created>?))
-              AND NOT EXISTS(SELECT 1 FROM matches WHERE
-                a=min(me.id,p.id) AND b=max(me.id,p.id))
-              AND (?='feed' OR EXISTS(SELECT 1 FROM reactions WHERE
-                actor=p.id AND target=me.id AND kind='like'))
-        """,
-            (uid, now - skip_days * 86400, mode),
-        ).fetchall()
-        if not rows:
+        viewer = self.user(uid)
+        if not viewer or viewer["banned"] or not viewer["active"] or not viewer["photo"] or not viewer["consent"]:
             return None
-        profiles = [self._profile(row) for row in rows]
-        fresh = [p for p in profiles if p["last_shown"] is None or p["last_shown"] <= now - EXPOSURE_COOLDOWN]
-        if fresh:
-            pool = fresh
-        else:
-            # When the pool is exhausted, rotate through its oldest impressions.
-            oldest = min(p["last_shown"] for p in profiles)
-            pool = [p for p in profiles if p["last_shown"] <= oldest + 0.001]
+        now = time.time()
+        source, params = self._discovery_query(viewer, mode, now, skip_days)
+        # SQL samples uniformly across the full eligible set. Only bounded, compact
+        # metadata crosses into Python; complete biographies/photos are loaded once.
+        fields = "SELECT p.id,p.age,p.city_key,p.interests,p.purpose,p.last_active,i.last_shown "
+        fresh = " AND (i.last_shown IS NULL OR i.last_shown<=:exposure_cutoff)"
+        rows = self.conn.execute(fields + source + fresh + " ORDER BY RANDOM() LIMIT :limit", params).fetchall()
+        if not rows:
+            oldest = self.conn.execute("SELECT min(i.last_shown) " + source, params).fetchone()[0]
+            if oldest is None:
+                return None
+            params["oldest"] = oldest + 0.001
+            rows = self.conn.execute(
+                fields + source + " AND i.last_shown<=:oldest ORDER BY RANDOM() LIMIT :limit",
+                params,
+            ).fetchall()
+        # Ordering the sampled rows does not change the probability of inclusion;
+        # it simply makes small-pool iteration stable for callers and debugging.
+        pool = sorted((self._profile(row) for row in rows), key=lambda profile: profile["id"])
         liked_profiles = [
             self._profile(row)
             for row in self.conn.execute(
-                "SELECT p.* FROM reactions r JOIN users p ON p.id=r.target "
+                "SELECT p.id,p.interests FROM reactions r JOIN users p ON p.id=r.target "
                 "WHERE r.actor=? AND r.kind='like' AND p.photo IS NOT NULL AND p.banned=0 "
                 "ORDER BY r.created DESC,r.target LIMIT 30",
                 (uid,),
             )
         ]
-        return choose_candidate(self.user(uid), pool, liked_profiles=liked_profiles, now=now)
+        selected = choose_candidate(viewer, pool, liked_profiles=liked_profiles, now=now)
+        if selected is None:
+            return None
+        profile = self.user(selected["id"])
+        profile["last_shown"] = selected["last_shown"]
+        return profile
 
     def present(self, uid, mode="feed", skip_days=7):
         row = self.candidates(uid, mode, skip_days)

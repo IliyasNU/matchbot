@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 
 import db.database as database_module
-from db.database import SCHEMA, Database
+from db.database import SCHEMA, SCHEMA_VERSION, Database
 from db.models import INTERESTS, normalize_interests
 from tests.conftest import member
 
@@ -33,7 +33,7 @@ def test_v1_migration_preserves_profiles_relationships_drafts_and_outbox(tmp_pat
     path = tmp_path / "legacy.sqlite3"
     legacy_database(path)
     db = Database(path)
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert db.user(1)["name"] == "Person 1"
     assert db.user(1)["interests"] == []
     assert db.user(1)["purpose"] == "any"
@@ -47,7 +47,7 @@ def test_v1_migration_preserves_profiles_relationships_drafts_and_outbox(tmp_pat
     db.close()
     # Reopening a migrated database never resets either version or preferences.
     db = Database(path)
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert db.is_match(1, 2)
     db.close()
 

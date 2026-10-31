@@ -13,6 +13,7 @@ class Settings:
     database: Path
     admin_ids: frozenset[int] = frozenset()
     skip_days: int = 7
+    max_concurrent_updates: int = 32
 
     @classmethod
     def from_env(cls):
@@ -25,9 +26,13 @@ class Settings:
         try:
             admins = frozenset(int(value.strip()) for value in os.getenv("ADMIN_IDS", "").split(",") if value.strip())
             days = int(os.getenv("SKIP_COOLDOWN_DAYS", "7"))
-            if days < 1 or any(uid <= 0 for uid in admins):
+            concurrency = int(os.getenv("MAX_CONCURRENT_UPDATES", "32"))
+            if days < 1 or any(uid <= 0 for uid in admins) or not 1 <= concurrency <= 128:
                 raise ValueError()
         except ValueError as exc:
-            raise ValueError("ADMIN_IDS must be positive numeric IDs; SKIP_COOLDOWN_DAYS must be >= 1.") from exc
+            raise ValueError(
+                "ADMIN_IDS must be positive numeric IDs; SKIP_COOLDOWN_DAYS must be >= 1; "
+                "MAX_CONCURRENT_UPDATES must be between 1 and 128."
+            ) from exc
         path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3"))
-        return cls(token, path if path.is_absolute() else ROOT / path, admins, days)
+        return cls(token, path if path.is_absolute() else ROOT / path, admins, days, concurrency)

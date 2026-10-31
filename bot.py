@@ -18,6 +18,7 @@ from db.models import normalize_interests
 from handlers.browse import BrowseFlow
 from handlers.profile import ProfileFlow
 from i18n import tr
+from update_processor import PerUserUpdateProcessor
 
 LOG = logging.getLogger(__name__)
 
@@ -470,9 +471,17 @@ class MatchBot:
         LOG.info("Bot initialized. Polling for private-chat updates.")
 
     def build(self):
+        processor = PerUserUpdateProcessor(self.settings.max_concurrent_updates)
         app = (
-            Application.builder().token(self.settings.token).concurrent_updates(False).post_init(self.post_init).build()
+            Application.builder()
+            .token(self.settings.token)
+            .concurrent_updates(processor)
+            .connection_pool_size(self.settings.max_concurrent_updates * 2 + 8)
+            .update_queue(asyncio.Queue(maxsize=2048))
+            .post_init(self.post_init)
+            .build()
         )
+        processor.bind(app)
         self.application = app
         app.add_handler(CallbackQueryHandler(self.handle))
         app.add_handler(MessageHandler(filters.ChatType.PRIVATE, self.handle))
