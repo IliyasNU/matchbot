@@ -449,6 +449,19 @@ class Database:
         a, b = sorted((uid, target))
         return bool(self.conn.execute("SELECT 1 FROM matches WHERE a=? AND b=?", (a, b)).fetchone())
 
+    def match_profile(self, uid, target):
+        """Current contact access; paused profiles remain available to their matches."""
+        a, b = sorted((uid, target))
+        row = self.conn.execute(
+            "SELECT p.* FROM matches m JOIN users p ON p.id=? JOIN users viewer ON viewer.id=? "
+            "WHERE m.a=? AND m.b=? AND viewer.banned=0 AND p.banned=0 "
+            "AND viewer.consent=1 AND p.consent=1 AND viewer.photo IS NOT NULL AND p.photo IS NOT NULL "
+            "AND NOT EXISTS(SELECT 1 FROM blocks WHERE actor=? AND target=?) "
+            "AND NOT EXISTS(SELECT 1 FROM blocks WHERE actor=? AND target=?)",
+            (target, uid, a, b, uid, target, target, uid),
+        ).fetchone()
+        return self._profile(row) if row else None
+
     def matches(self, uid, offset=0):
         return [
             self._profile(row)
@@ -526,7 +539,20 @@ class Database:
             )
         ]
 
+    def pending_notification(self, oid):
+        row = self.conn.execute(
+            "SELECT * FROM outbox WHERE id=? AND delivered=0 AND due<=?", (oid, time.time())
+        ).fetchone()
+        return dict(row) if row else None
+
     def notification_valid(self, item):
+        # The sending loop holds a snapshot across network awaits. A cancelled or
+        # completed row cannot become valid again just because the pair re-matched.
+        if not self.conn.execute(
+            "SELECT 1 FROM outbox WHERE id=? AND recipient=? AND other=? AND kind=? AND delivered=0 AND due<=?",
+            (item["id"], item["recipient"], item["other"], item["kind"], time.time()),
+        ).fetchone():
+            return False
         a, b = self.user(item["recipient"]), self.user(item["other"])
         if not a or not b or a["banned"] or b["banned"] or not a["reachable"]:
             return False

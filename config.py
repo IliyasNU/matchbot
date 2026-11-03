@@ -1,8 +1,11 @@
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from db.models import parse_integer
 
 ROOT = Path(__file__).resolve().parent
 
@@ -21,13 +24,16 @@ class Settings:
         token = os.getenv("BOT_TOKEN", "").strip()
         if not token or token == "YOUR_BOT_TOKEN_HERE":
             raise ValueError("Set BOT_TOKEN in .env using the token from @BotFather.")
-        if ":" not in token or not token.split(":", 1)[0].isdigit():
+        bot_id, _, secret = token.partition(":")
+        if parse_integer(bot_id) is None or not re.fullmatch(r"[A-Za-z0-9_-]+", secret):
             raise ValueError("BOT_TOKEN has an invalid format. Copy the full @BotFather token.")
         try:
-            admins = frozenset(int(value.strip()) for value in os.getenv("ADMIN_IDS", "").split(",") if value.strip())
+            admins = frozenset(
+                parse_integer(value.strip()) for value in os.getenv("ADMIN_IDS", "").split(",") if value.strip()
+            )
             days = int(os.getenv("SKIP_COOLDOWN_DAYS", "7"))
             concurrency = int(os.getenv("MAX_CONCURRENT_UPDATES", "32"))
-            if days < 1 or any(uid <= 0 for uid in admins) or not 1 <= concurrency <= 128:
+            if days < 1 or None in admins or not 1 <= concurrency <= 128:
                 raise ValueError()
         except ValueError as exc:
             raise ValueError(

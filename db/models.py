@@ -4,6 +4,7 @@ import json
 
 MIN_AGE = 18
 MAX_AGE = 100
+MAX_DATABASE_ID = (1 << 63) - 1
 GENDERS = {"male", "female", "other"}
 PREFERENCES = GENDERS | {"any"}
 INTERESTS = (
@@ -21,6 +22,14 @@ INTERESTS = (
     "fitness",
 )
 PURPOSES = frozenset({"any", "relationship", "friendship", "chat"})
+
+
+def parse_integer(value, *, minimum=1, maximum=MAX_DATABASE_ID):
+    """Parse untrusted ASCII integers without overflowing a SQLite parameter."""
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal() or len(value) > len(str(maximum)):
+        return None
+    number = int(value)
+    return number if minimum <= number <= maximum else None
 
 
 def normalize_interests(value) -> list[str]:

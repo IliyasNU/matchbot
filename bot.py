@@ -14,7 +14,7 @@ from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filt
 
 from config import Settings
 from db.database import Database
-from db.models import normalize_interests
+from db.models import normalize_interests, parse_integer
 from handlers.browse import BrowseFlow
 from handlers.profile import ProfileFlow
 from i18n import tr
@@ -127,6 +127,9 @@ class MatchBot:
                 await query.answer()
             except BadRequest:
                 return
+            # An administrator may suspend this member while Telegram answers.
+            user = self.db.user(uid)
+            lang = user["lang"]
         # Deletion/privacy are available even to suspended members.
         raw = getattr(update.effective_message, "text", None) or ""
         command = raw.split()[0].split("@")[0][1:].lower() if raw.startswith("/") else None
@@ -161,16 +164,12 @@ class MatchBot:
             if len(parts) == 3:
                 await self.browse.react(uid, parts[1], parts[2], query)
         elif data.startswith("matches:"):
-            try:
-                offset = int(data.split(":")[1])
-                if 0 <= offset <= 100000:
-                    await self.show_matches(uid, offset)
-            except ValueError:
-                pass
+            offset = parse_integer(data.partition(":")[2], minimum=0, maximum=100000)
+            if offset is not None:
+                await self.show_matches(uid, offset)
         elif data.startswith("unmatch:"):
-            try:
-                target = int(data.split(":")[1])
-            except ValueError:
+            target = parse_integer(data.partition(":")[2])
+            if target is None:
                 return
             if self.db.block_match(uid, target):
                 await self.remove_buttons(query)
@@ -179,9 +178,11 @@ class MatchBot:
                 await self.send(uid, tr(lang, "stale"))
         elif data.startswith("matchreport:"):
             parts = data.split(":")
-            if len(parts) not in {2, 3} or not parts[1].isdigit():
+            if len(parts) not in {2, 3}:
                 return
-            target = int(parts[1])
+            target = parse_integer(parts[1])
+            if target is None:
+                return
             if not self.db.is_match(uid, target):
                 await self.send(uid, tr(lang, "stale"))
             elif len(parts) == 2:
@@ -199,14 +200,14 @@ class MatchBot:
                 await self.remove_buttons(query)
                 await self.send(uid, tr(lang, "reported"))
         elif data.startswith("unblock:"):
-            target = data.split(":")[1]
-            if target.isdigit() and self.db.unblock(uid, int(target)):
+            target = parse_integer(data.partition(":")[2])
+            if target is not None and self.db.unblock(uid, target):
                 await self.remove_buttons(query)
                 await self.send(uid, tr(lang, "unblocked"))
         elif data.startswith("blocked:"):
-            offset = data.split(":")[1]
-            if offset.isdigit() and int(offset) <= 100000:
-                await self.show_blocked(uid, int(offset))
+            offset = parse_integer(data.partition(":")[2], minimum=0, maximum=100000)
+            if offset is not None:
+                await self.show_blocked(uid, offset)
         elif self.db.session(uid) and not query:
             await self.profile.accept(uid, message=update.effective_message)
         else:
@@ -300,10 +301,17 @@ class MatchBot:
     async def show_matches(self, uid, offset=0):
         lang = self.db.user(uid)["lang"]
         rows = self.db.matches(uid, offset)
-        if not rows:
-            await self.send(uid, tr(lang, "no_matches"))
+        shown = False
         for person in rows[:5]:
+            person = self.db.match_profile(uid, person["id"])
+            if person is None:
+                continue
             await self.card(uid, person)
+            # Photo delivery yields to other members: a block, deletion, ban or
+            # username change must take effect before sending the contact link.
+            person = self.db.match_profile(uid, person["id"])
+            if person is None:
+                continue
             await self.send(
                 uid,
                 contact_link(person, lang),
@@ -317,6 +325,9 @@ class MatchBot:
                     ]
                 ),
             )
+            shown = True
+        if not shown:
+            await self.send(uid, tr(lang, "no_matches"))
         if len(rows) > 5:
             await self.send(
                 uid,
@@ -361,6 +372,9 @@ class MatchBot:
             return
         async with self.notification_lock:
             for item in self.db.pending_notifications():
+                item = self.db.pending_notification(item["id"])
+                if item is None:
+                    continue
                 if not self.db.notification_valid(item):
                     self.db.notification_done(item["id"])
                     continue
@@ -408,10 +422,10 @@ class MatchBot:
                 or "No open reports.",
             )
         elif command in {"ban", "unban", "resolve", "inspect"}:
-            if len(args) != 1 or not args[0].isdigit():
+            target = parse_integer(args[0]) if len(args) == 1 else None
+            if target is None:
                 await self.send(uid, f"Usage: /{command} NUMERIC_ID")
                 return
-            target = int(args[0])
             if command == "inspect":
                 person = self.db.user(target)
                 if person and person["photo"]:
