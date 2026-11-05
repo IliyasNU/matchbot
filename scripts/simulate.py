@@ -132,9 +132,12 @@ async def simulate(args):
             async def fake_send(chat_id, text, **kwargs):
                 sent.append((chat_id, text))
 
+            async def fake_chat(uid):
+                return SimpleNamespace(id=uid, type="private", username=f"synthetic_{uid:04}")
+
             def service(database):
                 bot = MatchBot(database, Settings("123456:simulation-only", path))
-                bot.application = SimpleNamespace(bot=SimpleNamespace(send_message=fake_send))
+                bot.application = SimpleNamespace(bot=SimpleNamespace(send_message=fake_send, get_chat=fake_chat))
                 return bot
 
             bot = service(db)

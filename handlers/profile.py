@@ -4,7 +4,17 @@ import secrets
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from db.models import GENDERS, INTERESTS, PREFERENCES, PURPOSES, age_range, clean_text, normalize_interests
+from db.models import (
+    GENDERS,
+    INTERESTS,
+    MAX_INTERESTS,
+    PREFERENCES,
+    PURPOSES,
+    age_range,
+    clean_text,
+    read_interests,
+    read_purpose,
+)
 from i18n import tr
 
 STEPS = ["consent", "name", "age", "gender", "seeking", "city", "purpose", "interests", "bio", "photo", "preview"]
@@ -42,8 +52,8 @@ class ProfileFlow:
     async def prompt(self, uid, step, data):
         lang = self.db.user(uid)["lang"]
         # Defaults let existing registration/edit drafts resume across the upgrade.
-        data.setdefault("purpose", "any")
-        data["interests"] = normalize_interests(data.get("interests", []))
+        data["purpose"] = read_purpose(data.get("purpose"))
+        data["interests"] = read_interests(data.get("interests"))
         data["nonce"] = secrets.token_hex(5)
         self.db.save_session(uid, step, data)
 
@@ -94,6 +104,10 @@ class ProfileFlow:
             await self.s.send(uid, tr(lang, "stale"))
             return
         step, data = session
+        # A callback can arrive for a draft saved by an earlier bot version,
+        # without first passing through prompt() after the deployment.
+        data["purpose"] = read_purpose(data.get("purpose"))
+        data["interests"] = read_interests(data.get("interests"))
         text = message.text.strip() if message and message.text else ""
         try:
             if step == "delete_confirm":
@@ -135,7 +149,7 @@ class ProfileFlow:
             elif step == "purpose" and choice in PURPOSES:
                 data["purpose"] = choice
             elif step == "interests":
-                selected = normalize_interests(data.get("interests", []))
+                selected = read_interests(data.get("interests"))
                 if choice in {"done", "skip"}:
                     data["interests"] = [] if choice == "skip" else selected
                 elif choice and choice.startswith("interest_"):
@@ -144,7 +158,7 @@ class ProfileFlow:
                         raise ValueError()
                     if key in selected:
                         selected.remove(key)
-                    elif len(selected) < 5:
+                    elif len(selected) < MAX_INTERESTS:
                         selected.append(key)
                     else:
                         await self.s.send(uid, tr(lang, "interests_limit"))
