@@ -64,10 +64,15 @@ class BrowseFlow:
         if not result:
             await self.s.send(uid, tr(lang, "stale"))
             return
-        await self.s.remove_buttons(query)
-        if action in {"block", "report"}:
-            await self.s.send(uid, tr(lang, "reported" if action == "report" else "blocked"))
-        elif action == "like" and not result["matched"]:
-            await self.s.send(uid, tr(lang, "liked"))
-        await self.s.notifications()
-        await self.show(uid, result["mode"])
+        try:
+            await self.s.remove_buttons(query)
+            if action in {"block", "report"}:
+                await self.s.send(uid, tr(lang, "reported" if action == "report" else "blocked"))
+            elif action == "like" and not result["matched"]:
+                await self.s.send(uid, tr(lang, "liked"))
+            await self.show(uid, result["mode"])
+        finally:
+            # The reaction and outbox are already committed. Let this member see
+            # the next card before waking the sender; unrelated chats may be slow.
+            # A failed UI request must still leave background delivery scheduled.
+            self.s.schedule_notifications()

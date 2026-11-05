@@ -4,9 +4,10 @@ import json
 import secrets
 import sqlite3
 import time
+from collections import OrderedDict
 from pathlib import Path
 
-from db.models import MAX_AGE, MIN_AGE, normalize_interests, validate_profile
+from db.models import MAX_AGE, MIN_AGE, read_interests, read_purpose, validate_profile
 from matching import choose_candidate
 
 SCHEMA = """
@@ -94,10 +95,13 @@ CREATE INDEX IF NOT EXISTS reports_open ON reports(resolved,id);
 SCHEMA_VERSION = 3
 EXPOSURE_COOLDOWN = 86400
 RANKING_SAMPLE_SIZE = 256
+MAX_RATE_ENTRIES = 32768
+SAFETY_VIEW_MODES = {"safety:feed": "feed", "safety:likes": "likes"}
 
 
 class Database:
     def __init__(self, path: str | Path):
+        self._request_deadlines = OrderedDict()
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), timeout=10)
@@ -135,6 +139,7 @@ class Database:
 
     def close(self):
         self.conn.close()
+        self._request_deadlines.clear()
 
     def user(self, uid):
         row = self.conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
@@ -143,7 +148,8 @@ class Database:
     @staticmethod
     def _profile(row):
         profile = dict(row)
-        profile["interests"] = normalize_interests(profile.get("interests", "[]"))
+        profile["interests"] = read_interests(profile.get("interests", "[]"))
+        profile["purpose"] = read_purpose(profile.get("purpose"))
         return profile
 
     def touch(self, uid, username=None, lang="en"):
@@ -166,17 +172,35 @@ class Database:
                 "UPDATE users SET " + ",".join(f"{key}=?" for key in values) + " WHERE id=?",
                 (*values.values(), uid),
             )
-            self.conn.execute("DELETE FROM views WHERE actor=? OR target=?", (uid, uid))
+            self._invalidate_discovery_views(uid)
+
+    def _invalidate_discovery_views(self, uid):
+        # Only the last card remains authorized. Changing the shown person's
+        # profile must revoke likes without removing the ability to report it.
+        self.conn.execute("DELETE FROM views WHERE actor=?", (uid,))
+        self.conn.execute(
+            "UPDATE views SET mode='safety:' || mode WHERE target=? AND mode IN ('feed','likes')",
+            (uid,),
+        )
 
     def rate_allowed(self, uid, interval=0.5):
-        now = time.time()
-        with self.conn:
-            return bool(
-                self.conn.execute(
-                    "UPDATE users SET last_request=? WHERE id=? AND last_request<=?",
-                    (now, uid, now - interval),
-                ).rowcount
-            )
+        # One polling process owns the DB, so a transient limiter needs neither
+        # a write transaction nor a wall-clock timestamp persisted across boots.
+        now = time.monotonic()
+        if self._request_deadlines.get(uid, float("-inf")) > now:
+            return False
+        if not self.conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone():
+            return False
+        while self._request_deadlines:
+            oldest = next(iter(self._request_deadlines))
+            if self._request_deadlines[oldest] > now:
+                break
+            self._request_deadlines.popitem(last=False)
+        self._request_deadlines.pop(uid, None)
+        self._request_deadlines[uid] = now + interval
+        while len(self._request_deadlines) > MAX_RATE_ENTRIES:
+            self._request_deadlines.popitem(last=False)
+        return True
 
     def session(self, uid):
         row = self.conn.execute("SELECT * FROM sessions WHERE user_id=?", (uid,)).fetchone()
@@ -216,7 +240,7 @@ class Database:
                 ),
             )
             self.conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
-            self.conn.execute("DELETE FROM views WHERE actor=? OR target=?", (uid, uid))
+            self._invalidate_discovery_views(uid)
 
     def blocked(self, a, b):
         return bool(
@@ -345,11 +369,29 @@ class Database:
     def react(self, uid, token, kind, reason="other"):
         if kind not in {"like", "skip", "block", "report"}:
             raise ValueError("Invalid reaction")
+        if kind == "report" and reason not in {"spam", "underage", "abuse", "other"}:
+            raise ValueError("Invalid report reason")
         # IMMEDIATE prevents two processes from both creating the same match.
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             view = self.view(uid, token)
-            if not view or not self.eligible(self.user(uid), self.user(view["target"])):
+            if not view:
+                self.conn.rollback()
+                return None
+            actor, person = self.user(uid), self.user(view["target"])
+            if kind in {"block", "report"}:
+                authorized = (
+                    actor
+                    and person
+                    and actor["id"] != person["id"]
+                    and not actor["banned"]
+                    and actor["photo"]
+                    and actor["consent"]
+                    and view["mode"] in {"feed", "likes", *SAFETY_VIEW_MODES}
+                )
+            else:
+                authorized = view["mode"] in {"feed", "likes"} and self.eligible(actor, person)
+            if not authorized:
                 self.conn.rollback()
                 return None
             target = view["target"]
@@ -392,7 +434,7 @@ class Database:
                             "INSERT OR IGNORE INTO outbox(recipient,other,kind) VALUES(?,?,'like')", (target, uid)
                         )
             self.conn.commit()
-            return {"matched": matched, "target": target, "mode": view["mode"]}
+            return {"matched": matched, "target": target, "mode": SAFETY_VIEW_MODES.get(view["mode"], view["mode"])}
         except Exception:
             self.conn.rollback()
             raise
@@ -506,13 +548,14 @@ class Database:
                 )
             else:
                 self.conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        self._request_deadlines.pop(uid, None)
 
     def ban(self, uid, banned=True):
         if not self.user(uid):
             return False
         with self.conn:
             self.conn.execute("UPDATE users SET banned=?,active=0 WHERE id=?", (int(banned), uid))
-            self.conn.execute("DELETE FROM views WHERE actor=? OR target=?", (uid, uid))
+            self._invalidate_discovery_views(uid)
             self.conn.execute("DELETE FROM outbox WHERE recipient=? OR other=?", (uid, uid))
         return True
 
