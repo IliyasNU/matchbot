@@ -97,6 +97,7 @@ EXPOSURE_COOLDOWN = 86400
 RANKING_SAMPLE_SIZE = 256
 MAX_RATE_ENTRIES = 32768
 SAFETY_VIEW_MODES = {"safety:feed": "feed", "safety:likes": "likes"}
+PENDING_VIEW_MODES = {"pending:feed": "feed", "pending:likes": "likes"}
 
 
 class Database:
@@ -179,7 +180,8 @@ class Database:
         # profile must revoke likes without removing the ability to report it.
         self.conn.execute("DELETE FROM views WHERE actor=?", (uid,))
         self.conn.execute(
-            "UPDATE views SET mode='safety:' || mode WHERE target=? AND mode IN ('feed','likes')",
+            "UPDATE views SET mode='safety:' || replace(mode,'pending:','') "
+            "WHERE target=? AND mode IN ('feed','likes','pending:feed','pending:likes')",
             (uid,),
         )
 
@@ -347,6 +349,14 @@ class Database:
         return profile
 
     def present(self, uid, mode="feed", skip_days=7):
+        """Present a card immediately for callers that do not send via Telegram."""
+        return self._present(uid, mode, skip_days, pending=False)
+
+    def prepare_view(self, uid, mode="feed", skip_days=7):
+        """Reserve a token without recording a successful delivery."""
+        return self._present(uid, mode, skip_days, pending=True)
+
+    def _present(self, uid, mode, skip_days, *, pending):
         row = self.candidates(uid, mode, skip_days)
         if not row:
             with self.conn:
@@ -354,13 +364,50 @@ class Database:
             return None
         token = secrets.token_hex(8)
         with self.conn:
-            self.conn.execute("INSERT OR REPLACE INTO views VALUES(?,?,?,?)", (uid, row["id"], token, mode))
             self.conn.execute(
-                "INSERT INTO impressions(actor,target,last_shown) VALUES(?,?,?) "
-                "ON CONFLICT(actor,target) DO UPDATE SET last_shown=excluded.last_shown",
-                (uid, row["id"], time.time()),
+                "INSERT OR REPLACE INTO views VALUES(?,?,?,?)",
+                (uid, row["id"], token, "pending:" + mode if pending else mode),
             )
+            if not pending:
+                self._record_impression(uid, row["id"])
         return dict(row), token
+
+    def _record_impression(self, uid, target):
+        self.conn.execute(
+            "INSERT INTO impressions(actor,target,last_shown) VALUES(?,?,?) "
+            "ON CONFLICT(actor,target) DO UPDATE SET last_shown=excluded.last_shown",
+            (uid, target, time.time()),
+        )
+
+    def confirm_view(self, uid, token):
+        """Commit delivery only while this exact token still awaits confirmation."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            view = self.view(uid, token)
+            if not view or view["mode"] not in PENDING_VIEW_MODES:
+                return False
+            self.conn.execute(
+                "UPDATE views SET mode=? WHERE actor=? AND token=?",
+                (PENDING_VIEW_MODES[view["mode"]], uid, token),
+            )
+            self._record_impression(uid, view["target"])
+        return True
+
+    def abort_view(self, uid, token, *, may_have_arrived):
+        """Forget a rejected card, or keep moderation if delivery is uncertain."""
+        with self.conn:
+            if may_have_arrived:
+                self.conn.execute(
+                    "UPDATE views SET mode='safety:' || substr(mode,9) WHERE actor=? AND token=? "
+                    "AND mode IN ('pending:feed','pending:likes')",
+                    (uid, token),
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM views WHERE actor=? AND token=? "
+                    "AND mode IN ('pending:feed','pending:likes','safety:feed','safety:likes')",
+                    (uid, token),
+                )
 
     def view(self, uid, token):
         row = self.conn.execute("SELECT * FROM views WHERE actor=? AND token=?", (uid, token)).fetchone()
@@ -387,7 +434,9 @@ class Database:
                     and not actor["banned"]
                     and actor["photo"]
                     and actor["consent"]
-                    and view["mode"] in {"feed", "likes", *SAFETY_VIEW_MODES}
+                    # Seeing an opaque pending token is enough to request safety
+                    # action, including after a crash with delivery unconfirmed.
+                    and view["mode"] in {"feed", "likes", *SAFETY_VIEW_MODES, *PENDING_VIEW_MODES}
                 )
             else:
                 authorized = view["mode"] in {"feed", "likes"} and self.eligible(actor, person)
@@ -434,7 +483,12 @@ class Database:
                             "INSERT OR IGNORE INTO outbox(recipient,other,kind) VALUES(?,?,'like')", (target, uid)
                         )
             self.conn.commit()
-            return {"matched": matched, "target": target, "mode": SAFETY_VIEW_MODES.get(view["mode"], view["mode"])}
+            mode = view["mode"]
+            return {
+                "matched": matched,
+                "target": target,
+                "mode": SAFETY_VIEW_MODES.get(mode, PENDING_VIEW_MODES.get(mode, mode)),
+            }
         except Exception:
             self.conn.rollback()
             raise

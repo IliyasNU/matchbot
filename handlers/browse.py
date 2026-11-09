@@ -1,6 +1,7 @@
 """Discovery cards use server-issued tokens; callbacks cannot choose arbitrary users."""
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, Forbidden, RetryAfter
 
 from i18n import tr
 
@@ -17,7 +18,7 @@ class BrowseFlow:
             await self.s.send(uid, tr(lang, "paused"))
             await self.s.menu(uid)
             return
-        result = self.db.present(uid, mode, self.s.settings.skip_days)
+        result = self.db.prepare_view(uid, mode, self.s.settings.skip_days)
         if not result:
             await self.s.send(
                 uid, tr(lang, "empty_feed" if mode == "feed" else "empty_likes", days=self.s.settings.skip_days)
@@ -36,7 +37,19 @@ class BrowseFlow:
                 [InlineKeyboardButton(tr(lang, "home"), callback_data="nav:menu")],
             ]
         )
-        await self.s.card(uid, profile, keyboard)
+        try:
+            await self.s.card(uid, profile, keyboard)
+        except (BadRequest, Forbidden, RetryAfter):
+            # Telegram explicitly rejected the request carrying the keyboard.
+            self.db.abort_view(uid, token, may_have_arrived=False)
+            raise
+        except BaseException:
+            # A timeout or cancellation can hide an accepted send. Keep the
+            # token useful only for block/report and leave exposure unchanged.
+            self.db.abort_view(uid, token, may_have_arrived=True)
+            raise
+        else:
+            self.db.confirm_view(uid, token)
 
     async def react(self, uid, token, action, query):
         lang = self.db.user(uid)["lang"]

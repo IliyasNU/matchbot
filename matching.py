@@ -16,7 +16,7 @@ from itertools import islice
 from db.models import INTERESTS, PURPOSES
 
 EXPLORATION_RATE = 0.20
-MAX_LIKED_PROFILES = 50
+MAX_LIKED_PROFILES = 50  # Standalone scorer cap. Live discovery supplies at most 30 from SQLite.
 KNOWN_INTERESTS = frozenset(INTERESTS)
 KNOWN_PURPOSES = PURPOSES - {"any"}
 
