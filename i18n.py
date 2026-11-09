@@ -83,6 +83,11 @@ TEXT = {
     "skip": ("Skip", "Пропустить"),
     "cancel": ("Cancel", "Отмена"),
     "cancelled": ("Cancelled. Your saved profile is unchanged.", "Отменено. Сохранённая анкета не изменилась."),
+    "draft_resumed": ("Back to your profile draft.", "Возвращаемся к черновику анкеты."),
+    "draft_stale": (
+        "This button has expired. Use /start to continue your current draft.",
+        "Эта кнопка устарела. Нажми /start, чтобы продолжить текущий черновик.",
+    ),
     "invalid": (
         "That doesn't look right. Please follow the prompt above.",
         "Не получилось принять ответ. Следуй подсказке выше.",
@@ -152,6 +157,7 @@ TEXT = {
         "Взаимных симпатий пока нет. Ставь лайки в /browse — когда тебе ответят взаимностью, вы оба получите уведомление.",
     ),
     "more": ("More", "Ещё"),
+    "previous": ("Back", "Назад"),
     "range": (
         "Enter an age range, for example 18-35. Allowed ages: 18–100.",
         "Введи диапазон возраста, например 18-35. Допустимый возраст: 18–100.",

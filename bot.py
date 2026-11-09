@@ -5,16 +5,18 @@ import asyncio
 import html
 import logging
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
-from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ChatMemberHandler, MessageHandler, filters
 
 from config import Settings
 from db.database import Database
-from db.models import normalize_interests, parse_integer
+from db.models import parse_integer, read_interests, read_purpose
 from handlers.browse import BrowseFlow
 from handlers.profile import ProfileFlow
 from i18n import tr
@@ -39,6 +41,7 @@ class MatchBot:
         self.browse = BrowseFlow(self)
         self.notification_lock = asyncio.Lock()
         self.notification_backoff_until = 0.0
+        self._notification_scheduled = False
 
     async def send(self, uid, text, **kwargs):
         return await self.application.bot.send_message(chat_id=uid, text=text, **kwargs)
@@ -49,9 +52,10 @@ class MatchBot:
         heading = caption
         lang = self.db.user(uid)["lang"]
         details = []
-        if profile.get("purpose", "any") != "any":
-            details.append(tr(lang, "purpose_label") + ": " + tr(lang, "purpose_" + profile["purpose"]))
-        interests = normalize_interests(profile.get("interests", []))
+        purpose = read_purpose(profile.get("purpose"))
+        if purpose != "any":
+            details.append(tr(lang, "purpose_label") + ": " + tr(lang, "purpose_" + purpose))
+        interests = read_interests(profile.get("interests", []))
         if interests:
             details.append(
                 tr(lang, "interests_label") + ": " + ", ".join(tr(lang, "interest_" + tag) for tag in interests)
@@ -106,6 +110,17 @@ class MatchBot:
         except TelegramError:
             pass  # The transaction has already committed; an old message may be gone.
 
+    async def answer_callback(self, query, text=None):
+        try:
+            if text is None:
+                await query.answer()
+            else:
+                await query.answer(text)
+        except TelegramError as exc:
+            # Acknowledgement only clears the client's spinner. Expiration or a
+            # network failure must not discard a still-valid server-issued action.
+            LOG.warning("Callback acknowledgement failed: %s", type(exc).__name__)
+
     async def handle(self, update, context):
         if not update.effective_user or not update.effective_chat:
             return
@@ -113,28 +128,31 @@ class MatchBot:
         query = update.callback_query
         if update.effective_chat.type != "private":
             if query:
-                await query.answer()
+                await self.answer_callback(query)
             return
         tg_user = update.effective_user
         user = self.db.touch(uid, tg_user.username, tg_user.language_code or "en")
         lang = user["lang"]
         if not self.db.rate_allowed(uid):
             if query:
-                await query.answer(tr(lang, "slow"))
+                await self.answer_callback(query, tr(lang, "slow"))
             return
         if query:
-            try:
-                await query.answer()
-            except BadRequest:
-                return
+            await self.answer_callback(query)
             # An administrator may suspend this member while Telegram answers.
             user = self.db.user(uid)
             lang = user["lang"]
         # Deletion/privacy are available even to suspended members.
-        raw = getattr(update.effective_message, "text", None) or ""
+        # effective_message on a callback is a BOT message, including untrusted
+        # profile text. Only an incoming user message may contain a command.
+        raw = (getattr(getattr(update, "message", None), "text", None) or "") if not query else ""
         command = raw.split()[0].split("@")[0][1:].lower() if raw.startswith("/") else None
         args = raw.split()[1:] if command else []
         data = str(query.data or "") if query else ""
+        if data == "nav:cancel":
+            # Older versions sent cancel buttons without a wizard nonce.
+            await self.send(uid, tr(lang, "draft_stale"))
+            return
         if data.startswith("nav:"):
             command = data.split(":", 1)[1]
         if user["banned"]:
@@ -158,7 +176,7 @@ class MatchBot:
         elif data.startswith("w:"):
             parts = data.split(":")
             if len(parts) == 3:
-                await self.profile.accept(uid, nonce=parts[1], choice=parts[2])
+                await self.profile.accept(uid, nonce=parts[1], choice=parts[2], query=query)
         elif data.startswith("r:"):
             parts = data.split(":")
             if len(parts) == 3:
@@ -213,9 +231,38 @@ class MatchBot:
         else:
             await self.menu(uid)
 
+    async def handle_membership(self, update, context):
+        change = update.my_chat_member
+        if change.chat.type != "private":
+            return
+        uid = change.chat.id
+        user = self.db.user(uid)
+        if not user or user["banned"]:
+            return
+        status = change.new_chat_member.status
+        if status in {ChatMemberStatus.BANNED, ChatMemberStatus.LEFT}:
+            if user["reachable"] or user["active"]:
+                self.db.set_user(uid, active=0, reachable=0)
+        elif status == ChatMemberStatus.MEMBER and not user["reachable"]:
+            # Unblocking the bot does not publish a profile without /resume.
+            self.db.set_user(uid, reachable=1)
+
     async def command(self, uid, command, args=()):
         user = self.db.user(uid)
         lang = user["lang"]
+        if command in {
+            "register",
+            "edit",
+            "menu",
+            "profile",
+            "browse",
+            "likes",
+            "matches",
+            "blocked",
+            "pause",
+            "resume",
+        }:
+            self.profile.leave_settings(uid)
         if command in {"admin", "stats", "reports", "inspect", "ban", "unban", "resolve"}:
             await self.admin(uid, command, args)
             return
@@ -240,13 +287,10 @@ class MatchBot:
             )
             return
         if command == "delete":
-            await self.profile.prompt(uid, "delete_confirm", {})
+            await self.profile.open_settings(uid, "delete_confirm")
             return
         if command == "cancel":
-            self.db.clear_session(uid)
-            await self.send(uid, tr(lang, "cancelled"))
-            if not user["banned"]:
-                await self.menu(uid)
+            await self.profile.cancel(uid)
             return
         if command == "start":
             session = self.db.session(uid)
@@ -260,7 +304,6 @@ class MatchBot:
             await self.profile.begin(uid, editing=bool(user["photo"]))
             return
         if command == "menu":
-            self.db.clear_session(uid)
             await self.menu(uid)
             return
         if not user["photo"]:
@@ -272,7 +315,6 @@ class MatchBot:
             await self.send(uid, tr(lang, "active_status" if user["active"] else "paused_status"))
             await self.menu(uid)
         elif command in {"browse", "likes"}:
-            self.db.clear_session(uid)
             await self.browse.show(uid, "feed" if command == "browse" else "likes")
         elif command == "matches":
             await self.show_matches(uid)
@@ -289,9 +331,8 @@ class MatchBot:
                     location=tr(lang, "local" if user["local_only"] else "everywhere"),
                 ),
             )
-            await self.profile.prompt(uid, "range", {})
+            await self.profile.open_settings(uid, "range")
         elif command in {"pause", "resume"}:
-            self.db.clear_session(uid)
             self.db.set_user(uid, active=int(command == "resume"))
             await self.send(uid, tr(lang, "paused" if command == "pause" else "resumed"))
             await self.menu(uid)
@@ -301,44 +342,33 @@ class MatchBot:
     async def show_matches(self, uid, offset=0):
         lang = self.db.user(uid)["lang"]
         rows = self.db.matches(uid, offset)
-        shown = False
-        for person in rows[:5]:
-            person = self.db.match_profile(uid, person["id"])
-            if person is None:
-                continue
+        person = self.db.match_profile(uid, rows[0]["id"]) if rows else None
+        if person is not None:
             await self.card(uid, person)
             # Photo delivery yields to other members: a block, deletion, ban or
             # username change must take effect before sending the contact link.
-            person = self.db.match_profile(uid, person["id"])
-            if person is None:
-                continue
-            await self.send(
-                uid,
-                contact_link(person, lang),
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(tr(lang, "block"), callback_data=f"unmatch:{person['id']}"),
-                            InlineKeyboardButton(tr(lang, "report"), callback_data=f"matchreport:{person['id']}"),
-                        ],
-                    ]
-                ),
+            person = await self.contact_profile(uid, person["id"])
+        keyboard = []
+        if person is not None:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(tr(lang, "block"), callback_data=f"unmatch:{person['id']}"),
+                    InlineKeyboardButton(tr(lang, "report"), callback_data=f"matchreport:{person['id']}"),
+                ]
             )
-            shown = True
-        if not shown:
-            await self.send(uid, tr(lang, "no_matches"))
-        if len(rows) > 5:
-            await self.send(
-                uid,
-                tr(lang, "matches"),
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [InlineKeyboardButton(tr(lang, "more"), callback_data=f"matches:{offset + 5}")],
-                    ]
-                ),
-            )
-        await self.menu(uid)
+        navigation = []
+        if offset:
+            navigation.append(InlineKeyboardButton(tr(lang, "previous"), callback_data=f"matches:{offset - 1}"))
+        if len(rows) > 1:
+            navigation.append(InlineKeyboardButton(tr(lang, "more"), callback_data=f"matches:{offset + 1}"))
+        navigation.append(InlineKeyboardButton(tr(lang, "home"), callback_data="nav:menu"))
+        keyboard.append(navigation)
+        await self.send(
+            uid,
+            contact_link(person, lang) if person is not None else tr(lang, "no_matches"),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     async def show_blocked(self, uid, offset=0):
         lang = self.db.user(uid)["lang"]
@@ -367,6 +397,47 @@ class MatchBot:
             )
         await self.menu(uid)
 
+    async def contact_profile(self, uid, target):
+        """Resolve a contact by immutable ID and recheck access after the lookup."""
+        if self.db.match_profile(uid, target) is None:
+            return None
+        username = None
+        try:
+            chat = await self.application.bot.get_chat(target)
+        except RetryAfter:
+            raise
+        except TelegramError as exc:
+            # Never fall back to a cached username: it may belong to someone else.
+            LOG.info("Contact lookup failed; using Telegram ID: %s", type(exc).__name__)
+        else:
+            if chat.id == target and chat.type == "private":
+                username = chat.username
+        person = self.db.match_profile(uid, target)
+        if person is not None:
+            person["username"] = username
+        return person
+
+    def schedule_notifications(self):
+        """Coalesce foreground wakeups; the periodic job also recovers after restart."""
+        if (
+            self._notification_scheduled
+            or self.notification_lock.locked()
+            or time.monotonic() < self.notification_backoff_until
+        ):
+            return
+        self._notification_scheduled = True
+        try:
+            self.application.job_queue.run_once(self._notification_wakeup, when=0, name="notifications-wakeup")
+        except Exception:
+            self._notification_scheduled = False
+            raise
+
+    async def _notification_wakeup(self, context):
+        try:
+            await self.notifications(context)
+        finally:
+            self._notification_scheduled = False
+
     async def notifications(self, context=None):
         if self.notification_lock.locked() or time.monotonic() < self.notification_backoff_until:
             return
@@ -378,14 +449,25 @@ class MatchBot:
                 if not self.db.notification_valid(item):
                     self.db.notification_done(item["id"])
                     continue
-                person = self.db.user(item["other"])
-                lang = self.db.user(item["recipient"])["lang"]
-                text = (
-                    tr(lang, "new_like")
-                    if item["kind"] == "like"
-                    else tr(lang, "match_notice", name=html.escape(person["name"]), contact=contact_link(person, lang))
-                )
                 try:
+                    person = (
+                        await self.contact_profile(item["recipient"], item["other"])
+                        if item["kind"] == "match"
+                        else self.db.user(item["other"])
+                    )
+                    if self.db.pending_notification(item["id"]) is None:
+                        continue
+                    if person is None or not self.db.notification_valid(item):
+                        self.db.notification_done(item["id"])
+                        continue
+                    lang = self.db.user(item["recipient"])["lang"]
+                    text = (
+                        tr(lang, "new_like")
+                        if item["kind"] == "like"
+                        else tr(
+                            lang, "match_notice", name=html.escape(person["name"]), contact=contact_link(person, lang)
+                        )
+                    )
                     await self.send(item["recipient"], text, parse_mode="HTML")
                 except Forbidden:
                     self.db.set_user(item["recipient"], active=0, reachable=0)
@@ -447,9 +529,12 @@ class MatchBot:
             )
 
     async def on_error(self, update, context):
-        # Telegram exception strings can contain request URLs/tokens or user content.
-        LOG.error("Update failed: %s", type(context.error).__name__)
-        if update and update.effective_chat and update.effective_chat.type == "private":
+        # Log locations only. Exception text, source lines and locals can expose
+        # Telegram credentials or user content.
+        frames = traceback.extract_tb(context.error.__traceback__, limit=-8)
+        locations = " > ".join(f"{Path(frame.filename).name}:{frame.lineno} {frame.name}" for frame in frames)
+        LOG.error("Handler failed (%s) %s", type(context.error).__name__, locations)
+        if isinstance(update, Update) and update.effective_chat and update.effective_chat.type == "private":
             user = self.db.user(update.effective_chat.id)
             try:
                 await self.send(update.effective_chat.id, tr(user["lang"] if user else "en", "error"))
@@ -499,6 +584,7 @@ class MatchBot:
         self.application = app
         app.add_handler(CallbackQueryHandler(self.handle))
         app.add_handler(MessageHandler(filters.ChatType.PRIVATE, self.handle))
+        app.add_handler(ChatMemberHandler(self.handle_membership, ChatMemberHandler.MY_CHAT_MEMBER))
         app.add_error_handler(self.on_error)
         app.job_queue.run_repeating(self.notifications, interval=5, first=1, job_kwargs={"max_instances": 1})
         return app
@@ -556,7 +642,10 @@ def main():
                     if not settings.admin_ids:
                         print("ADMIN_IDS is empty: set an administrator to review reports.")
                 else:
-                    app.run_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY], drop_pending_updates=False)
+                    app.run_polling(
+                        allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY, Update.MY_CHAT_MEMBER],
+                        drop_pending_updates=False,
+                    )
             finally:
                 db.close()
     except (ValueError, RuntimeError) as exc:

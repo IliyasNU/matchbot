@@ -2,8 +2,11 @@ services:
   bot:
     build: .
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file: .env
     volumes:
       - bot-data:/app/data
+      - bot-backups:/app/backups
 volumes:
   bot-data:
+  bot-backups:

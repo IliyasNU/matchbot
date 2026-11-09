@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from telegram import Update
@@ -18,7 +18,16 @@ from tests.conftest import member, react
 
 def service(db):
     bot = MatchBot(db, Settings("123456:fake-test-token", ":memory:", frozenset({99})))
-    bot.application = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock()))
+    bot.application = SimpleNamespace(
+        bot=SimpleNamespace(
+            send_message=AsyncMock(),
+            send_photo=AsyncMock(),
+            get_chat=AsyncMock(
+                side_effect=lambda uid: SimpleNamespace(id=uid, type="private", username=db.user(uid)["username"])
+            ),
+        ),
+        job_queue=SimpleNamespace(run_once=Mock()),
+    )
     return bot
 
 
@@ -132,6 +141,8 @@ class FakeTelegram(BaseRequest):
         self.calls.append((endpoint, params))
         if endpoint == "getMe":
             result = {"id": 123456, "is_bot": True, "first_name": "MatchBot", "username": "test_match_bot"}
+        elif endpoint == "getChat":
+            result = {"id": int(params["chat_id"]), "type": "private", "accent_color_id": 0, "max_reaction_count": 0}
         elif endpoint in {"sendMessage", "sendPhoto", "editMessageReplyMarkup"}:
             self.message_id += 1
             result = {
@@ -175,6 +186,9 @@ def test_end_to_end_registration_matching_restart_edit_delete(db):
                 message["text"] = text
             payload = {"update_id": counter, "message": message}
             if callback:
+                # Bot message text can contain a profile starting with a slash.
+                # The callback payload must be authoritative for every button.
+                message["text"] = "/pause"
                 payload = {
                     "update_id": counter,
                     "callback_query": {
@@ -229,6 +243,8 @@ def test_end_to_end_registration_matching_restart_edit_delete(db):
             token = db.conn.execute("SELECT token FROM views WHERE actor=2").fetchone()[0]
             await dispatch(2, callback=f"r:{token}:like")
             assert db.is_match(1, 2)
+            # The handler schedules delivery separately; exercise the durable sender.
+            await service_bot.notifications()
             sent = [p for e, p in transport.calls if e == "sendMessage"]
             notices = [p for p in sent if "It's a match!" in p["text"] or "Взаимная симпатия!" in p["text"]]
             assert len(notices) == 2

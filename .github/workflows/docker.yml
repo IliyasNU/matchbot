@@ -1,0 +1,95 @@
+name: Docker smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build, start offline, and verify both volumes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .env
+          test ! -e .env.smoke-secret
+          test ! -e smoke-canary.sqlite3
+          printf 'BOT_TOKEN=123456:offline_smoke\nADMIN_IDS=42\nDATABASE_PATH=data/bot.sqlite3\n' > .env
+          printf 'build-context-canary\n' > .env.smoke-secret
+          printf 'database-build-context-canary\n' > smoke-canary.sqlite3
+
+          cat > "$RUNNER_TEMP/matchbot-offline.yaml" <<'YAML'
+          services:
+            bot:
+              network_mode: none
+              restart: "no"
+              command: ["python", "bot.py", "--check"]
+          YAML
+          compose=(docker compose -p matchbot-ci -f compose.yaml -f "$RUNNER_TEMP/matchbot-offline.yaml")
+          trap '"${compose[@]}" down --volumes --remove-orphans' EXIT
+
+          "${compose[@]}" build --pull bot
+          "${compose[@]}" run --rm --no-deps -T bot sh -eu -c '
+            test "$(id -u)" -ne 0
+            test ! -e /app/.env
+            test ! -e /app/.env.smoke-secret
+            test ! -e /app/smoke-canary.sqlite3
+            test -w /app/data
+            test -w /app/backups
+          '
+
+          "${compose[@]}" up --no-build --exit-code-from bot bot
+          before=$("${compose[@]}" ps -a -q bot)
+          test -n "$before"
+          "${compose[@]}" run --rm --no-deps -T bot python - <<'PY'
+          from pathlib import Path
+
+          from db.database import Database
+
+          assert Path("data/bot.sqlite3").is_file()
+          database = Database("data/bot.sqlite3")
+          try:
+              database.touch(42, "compose_smoke")
+          finally:
+              database.close()
+          PY
+          "${compose[@]}" run --rm --no-deps -T bot python scripts/backup.py --output /app/backups/smoke.sqlite3
+
+          "${compose[@]}" up --no-build --force-recreate --exit-code-from bot bot
+          after=$("${compose[@]}" ps -a -q bot)
+          test -n "$after"
+          test "$before" != "$after"
+          "${compose[@]}" run --rm --no-deps -T bot python - <<'PY'
+          from contextlib import closing
+          import sqlite3
+
+          for path in ("data/bot.sqlite3", "backups/smoke.sqlite3"):
+              with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+                  assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",), path
+                  row = connection.execute("SELECT username FROM users WHERE id = ?", (42,)).fetchone()
+                  assert row == ("compose_smoke",), path
+          PY
+
+          "${compose[@]}" run --rm --no-deps -T bot cat /app/backups/smoke.sqlite3 > "$RUNNER_TEMP/smoke.sqlite3"
+          python3 - "$RUNNER_TEMP/smoke.sqlite3" <<'PY'
+          from contextlib import closing
+          from pathlib import Path
+          import sqlite3
+          import sys
+
+          path = Path(sys.argv[1]).resolve()
+          with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+              assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+              assert connection.execute("SELECT username FROM users WHERE id = 42").fetchone() == ("compose_smoke",)
+          PY

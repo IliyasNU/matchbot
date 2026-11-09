@@ -83,7 +83,7 @@ def test_interest_toggle_rotates_nonce_and_rejects_previous_button(db):
 
     asyncio.run(scenario())
     assert db.session(1)[1]["interests"] == ["music"]
-    assert service.send.call_args.args[1] == tr("en", "stale")
+    assert service.send.call_args.args[1] == tr("en", "draft_stale")
 
 
 @pytest.mark.parametrize("choice", ["skip", "done"])

@@ -4,6 +4,7 @@ import json
 
 MIN_AGE = 18
 MAX_AGE = 100
+MAX_INTERESTS = 5
 MAX_DATABASE_ID = (1 << 63) - 1
 GENDERS = {"male", "female", "other"}
 PREFERENCES = GENDERS | {"any"}
@@ -33,7 +34,7 @@ def parse_integer(value, *, minimum=1, maximum=MAX_DATABASE_ID):
 
 
 def normalize_interests(value) -> list[str]:
-    """Canonical public tags, shared by stored profiles and registration drafts."""
+    """Strict validation for newly supplied public interest tags."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -50,9 +51,39 @@ def normalize_interests(value) -> list[str]:
             raise ValueError("Unknown interest")
         if tag not in tags:
             tags.append(tag)
-    if len(tags) > 5:
+    if len(tags) > MAX_INTERESTS:
         raise ValueError("Choose at most five interests")
     return tags
+
+
+def read_interests(value) -> list[str]:
+    """Read legacy optional metadata without rejecting the rest of a profile.
+
+    Retired tags and malformed entries are neutral. Keep stored values untouched
+    until the owner next saves their profile using strict write validation.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, RecursionError):
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    tags = []
+    for tag in value:
+        if not isinstance(tag, str):
+            continue
+        tag = tag.strip().casefold()
+        if tag in INTERESTS and tag not in tags:
+            tags.append(tag)
+            if len(tags) >= MAX_INTERESTS:
+                break
+    return tags
+
+
+def read_purpose(value) -> str:
+    """Unknown or retired optional purposes fall back to the neutral value."""
+    return value if isinstance(value, str) and value in PURPOSES else "any"
 
 
 def clean_text(value: str, minimum: int, maximum: int) -> str:
